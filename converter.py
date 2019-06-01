@@ -4,8 +4,8 @@ import docx
 import os
 
 
-class File:
-    """Class that handles files."""
+class Document:
+    """Class for parsing documents and modifying their contents."""
 
     def __init__(self, fname, config_fname='basic.ini'):
         self.fname = fname
@@ -21,8 +21,12 @@ class File:
         for par in self.paragraphs:
             string = par.get_string()
             if string:
-                wr_par = self.format.p_tag.replace('justify', par.align) + \
-                         string + self.format.p_end_tag
+                if par.align == 'right':
+                    p_tag_right = self.format.p_tag[:2] + " align='right'" + \
+                                  self.format.p_tag[2:]
+                    wr_par = p_tag_right + string + self.format.p_end_tag
+                else:
+                    wr_par = self.format.p_tag + string + self.format.p_end_tag
                 result.append(wr_par)
             else:
                 result.append(self.format.div_end_tag + self.format.div_tag)
@@ -31,7 +35,7 @@ class File:
         return result
 
 
-class TxtFile(File):
+class TxtDocument(Document):
     """Subclass for .txt documents."""
 
     def __init__(self, fname):
@@ -44,7 +48,7 @@ class TxtFile(File):
         return ''.join([par.get_text for par in self.paragraphs])
 
 
-class DocxFile(File):
+class DocxDocument(Document):
     """Subclass for .docx documents."""
 
     def __init__(self, fname):
@@ -131,38 +135,60 @@ class Format:
         config = configparser.ConfigParser()
         config.read(config_fname)
         section = config['DEFAULT']
-        ind = '{0}{1};'.format(section['text-indent'],
-                               section['text-indent-units'])
-        w = '{0}{1};'.format(section['width'], section['width-units'])
-        p_mar = Format.get_margins('p', section)
-        div_mar = Format.get_margins('div', section)
+        ind = self.get_indent(section)
+        w = self.get_width(section)
+        p_mar = self.get_margins('p', section).rstrip()
+        div_mar = self.get_margins('div', section)
 
-        self.div_tag = f"<div style='{div_mar} text-indent: {ind} width: {w}'>"
-        self.p_tag = f"<p align='justify' style='{p_mar}'>"
+        self.div_tag = f"<div align='justify' style='{div_mar}{ind}{w}'>"
+        self.p_tag = f"<p style='{p_mar}'>" if p_mar else '<p>'
         self.div_end_tag = '</div>'
         self.p_end_tag = '</p>'
 
-    @staticmethod
-    def get_margins(tag, section):
-        top = section[f'{tag}-margin-top']
-        right = section[f'{tag}-margin-right']
-        bottom = section[f'{tag}-margin-bottom']
-        left = section[f'{tag}-margin-left']
-        units = section[f'{tag}-margin-units']
+    def get_width(self, section):
+        width = int(section['width'])
+        units = section['width-units']
+        if width != 100:
+            return 'width: {0}{1};'.format(width, units)
+        return ''
 
-        if not all([top, right, bottom, left]):
-            return 'margin: 0;'
-        elif top == right == bottom == left:
-            return 'margin: {1}{0};'.format(units, top)
-        elif top == bottom and right == left:
-            return 'margin: {1}{0} {2}{0};'.format(units, top, right)
-        elif top != bottom and right == left:
-            return 'margin: {1}{0} {2}{0} {3}{0};'.format(units, top,
-                                                          right, bottom)
-        else:
-            return 'margin: {1}{0} {2}{0} {3}{0} {4}{0};'.format(units,
-                                                                 top, right,
-                                                                 bottom, left)
+    def get_indent(self, section):
+        indent = float(section['text-indent'])
+        units = section['text-indent-units']
+        if indent:
+            return 'text-indent: {0}{1};'.format(indent, units)
+        return ''
+
+    def get_margins(self, tag, section):
+        top = float(section[f'{tag}-margin-top'])
+        right = float(section[f'{tag}-margin-right'])
+        bottom = float(section[f'{tag}-margin-bottom'])
+        left = float(section[f'{tag}-margin-left'])
+        units = section[f'{tag}-margin-units']
+                                                                    # symbols
+        if not all([top, right, bottom, left]):                     #   0
+            return ''
+        elif top == right == bottom == left:                        #   14
+            print(top, right, left, right)
+            print(not right, not left, not top, not bottom)
+            return 'margin: {1}{0}; '.format(units, top)
+        elif top and not all([right, bottom, left]):                #   18
+            return 'margin-top: {1}{0}; '.format(units, top)
+        elif top == bottom and right == left:                       #   19
+            return 'margin: {1}{0} {2}{0}; '.format(units, top, right)
+        elif left and not all([right, top, bottom]):                #   19
+            return 'margin-right: {1}{0}; '.format(units, left)
+        elif right and not all([left, top, bottom]):                #   20
+            return 'margin-left: {1}{0}; '.format(units, right)
+        elif bottom and not all([right, left, top]):                #   21
+            return 'margin-bottom: {1}{0}; '.format(units, bottom)
+        elif top != bottom and right == left:                       #   26
+            return 'margin: {1}{0} {2}{0} {3}{0}; '.format(units, top,
+                                                           right, bottom)
+        else:                                                       #   32
+            return 'margin: {1}{0} {2}{0} {3}{0} {4}{0}; '.format(units,
+                                                                  top, right,
+                                                                  bottom, left)
 
 
 if __name__ == "__main__":
@@ -178,15 +204,19 @@ if __name__ == "__main__":
 
         file_name, file_format = os.path.splitext(fname)
         if file_format == '.txt':
-            document = TxtFile(fname)
+            document = TxtDocument(fname)
         elif file_format in ['.docx', '.doc']:
-            document = DocxFile(fname)
+            document = DocxDocument(fname)
         else:
             continue
 
         html_document = document.get_modified_text()
 
-        fpath = os.path.join(odir, file_name + '.txt')
-        with open(fpath, 'w', encoding='cp1251') as f:
-            for line in html_document:
-                f.write(line)
+        fpath_txt = os.path.join(odir, file_name + '.txt')
+        fpath_html = fpath_txt.replace('.txt', '.html')
+
+        for fpath in [fpath_txt, fpath_html]:
+            with open(fpath, 'w', encoding='cp1251') as f:
+                for line in html_document:
+                    f.write(line)
+
